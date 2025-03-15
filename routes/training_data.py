@@ -7,37 +7,12 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from bson import ObjectId
-from pydantic import BaseModel, Field
-from main import get_current_user, app
+from pydantic import BaseModel, Field, ConfigDict
+from main import get_current_user, app, PyObjectId
 
 router = APIRouter(prefix="/training-data", tags=["Training Data"])
 
 # Pydantic models
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, 
-        core_schema: dict, 
-        handler: Any
-    ) -> dict:
-        """
-        Replace __modify_schema__ with __get_pydantic_json_schema__ for Pydantic v2 compatibility.
-        """
-        json_schema = handler(core_schema)
-        json_schema.update(type="string")
-        return json_schema
-
-
 class DataSplitsModel(BaseModel):
     training: float
     validation: float
@@ -80,10 +55,11 @@ class TrainingDataDB(TrainingDataBase):
     createdAt: datetime
     updatedAt: datetime
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str}
+    )
 
 
 # Routes
@@ -199,7 +175,7 @@ async def create_training_data(
             )
     
     # Prepare training data
-    data_dict = training_data.dict()
+    data_dict = training_data.model_dump()
     timestamp = datetime.now()
     
     # Convert source organizations to ObjectIds if provided
@@ -277,7 +253,7 @@ async def update_training_data(
             )
     
     # Prepare update data
-    update_data = {k: v for k, v in training_data_update.dict().items() if v is not None}
+    update_data = {k: v for k, v in training_data_update.model_dump().items() if v is not None}
     update_data["updatedAt"] = datetime.now()
     
     # Convert source organizations to ObjectIds if provided
@@ -515,6 +491,3 @@ async def add_source_organizations(
         updated_data["sourceOrganizations"] = [str(org_id) for org_id in updated_data["sourceOrganizations"]]
     
     return updated_data
-
-
-

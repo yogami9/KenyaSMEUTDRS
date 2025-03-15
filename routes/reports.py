@@ -1,4 +1,3 @@
-
 """
 Reports API Routes
 This module contains API endpoints for managing security reports.
@@ -8,37 +7,12 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
-from pydantic import BaseModel, Field
-from main import get_current_user, app
+from pydantic import BaseModel, Field, ConfigDict
+from main import get_current_user, app, PyObjectId
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 # Pydantic models
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, 
-        core_schema: dict, 
-        handler: Any
-    ) -> dict:
-        """
-        Replace __modify_schema__ with __get_pydantic_json_schema__ for Pydantic v2 compatibility.
-        """
-        json_schema = handler(core_schema)
-        json_schema.update(type="string")
-        return json_schema
-
-
 class PeriodModel(BaseModel):
     startDate: datetime
     endDate: datetime
@@ -83,10 +57,11 @@ class ReportDB(ReportBase):
     createdAt: datetime
     updatedAt: datetime
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str}
+    )
 
 
 # Routes
@@ -202,7 +177,7 @@ async def create_report(
         )
     
     # Prepare report data
-    report_data = report.dict()
+    report_data = report.model_dump()
     timestamp = datetime.now()
     
     # Convert string IDs to ObjectIds
@@ -265,7 +240,7 @@ async def update_report(
             )
     
     # Prepare update data
-    update_data = {k: v for k, v in report_update.dict().items() if v is not None}
+    update_data = {k: v for k, v in report_update.model_dump().items() if v is not None}
     update_data["updatedAt"] = datetime.now()
     
     # Special handling for status changes
@@ -597,7 +572,17 @@ async def generate_vulnerabilities_summary(org_id, start_date, end_date):
             },
             "count": {"$sum": 1}
         }},
-        {"$sort": {"_id.severity": 1}}
+        {"$group": {
+            "_id": "$_id.severity",
+            "statuses": {
+                "$push": {
+                    "status": "$_id.status",
+                    "count": "$count"
+                }
+            },
+            "totalCount": {"$sum": "$count"}
+        }},
+        {"$sort": {"_id": 1}}
     ]
     
     # Run aggregation
@@ -617,20 +602,18 @@ async def generate_vulnerabilities_summary(org_id, start_date, end_date):
         summary["by_status"][status] = 0
     
     # Process aggregation results
-    for group in vuln_counts:
-        severity = group["_id"]["severity"]
-        status = group["_id"]["status"]
-        count = group["count"]
-        
+    for severity_group in vuln_counts:
+        severity = severity_group["_id"]
+        count = severity_group["totalCount"]
         summary["total"] += count
+        summary["by_severity"][severity] = count
         
-        # Update by_severity counts
-        if severity not in summary["by_severity"]:
-            summary["by_severity"][severity] = 0
-        summary["by_severity"][severity] += count
-        
-        # Update by_status counts
-        summary["by_status"][status] += count
+        # Process status counts
+        for status_item in severity_group["statuses"]:
+            status = status_item["status"]
+            status_count = status_item["count"]
+            
+            summary["by_status"][status] = summary["by_status"].get(status, 0) + status_count
     
     # Get patch and exploit availability counts
     patch_pipeline = [

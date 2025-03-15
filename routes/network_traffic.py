@@ -7,37 +7,12 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
-from pydantic import BaseModel, Field
-from main import get_current_user, app
+from pydantic import BaseModel, Field, ConfigDict
+from main import get_current_user, app, PyObjectId
 
 router = APIRouter(prefix="/network-traffic", tags=["Network Traffic"])
 
 # Pydantic models
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, 
-        core_schema: dict, 
-        handler: Any
-    ) -> dict:
-        """
-        Replace __modify_schema__ with __get_pydantic_json_schema__ for Pydantic v2 compatibility.
-        """
-        json_schema = handler(core_schema)
-        json_schema.update(type="string")
-        return json_schema
-
-
 class NetworkTrafficBase(BaseModel):
     timeWindow: str
     startTime: datetime
@@ -64,10 +39,11 @@ class NetworkTrafficDB(NetworkTrafficBase):
     deviceId: Optional[PyObjectId] = None
     createdAt: datetime
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str}
+    )
 
 
 # Routes
@@ -203,7 +179,7 @@ async def create_network_traffic(
             )
     
     # Prepare traffic data
-    traffic_data = traffic.dict()
+    traffic_data = traffic.model_dump()
     timestamp = datetime.now()
     
     # Convert string IDs to ObjectIds

@@ -1,4 +1,3 @@
-
 """
 Organization API Routes
 This module contains API endpoints for managing organizations.

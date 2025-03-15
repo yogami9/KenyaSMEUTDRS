@@ -7,37 +7,12 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
-from pydantic import BaseModel, Field
-from main import get_current_user, app
+from pydantic import BaseModel, Field, ConfigDict
+from main import get_current_user, app, PyObjectId
 
 router = APIRouter(prefix="/logs", tags=["Logs"])
 
 # Pydantic models
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, 
-        core_schema: dict, 
-        handler: Any
-    ) -> dict:
-        """
-        Replace __modify_schema__ with __get_pydantic_json_schema__ for Pydantic v2 compatibility.
-        """
-        json_schema = handler(core_schema)
-        json_schema.update(type="string")
-        return json_schema
-
-
 class LogBase(BaseModel):
     organizationId: Optional[str] = None
     deviceId: Optional[str] = None
@@ -65,10 +40,11 @@ class LogDB(LogBase):
     timestamp: datetime
     relatedThreatId: Optional[PyObjectId] = None
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str}
+    )
 
 
 # Routes
@@ -190,7 +166,7 @@ async def create_log(
 ):
     """Create a new log entry."""
     # Prepare log data
-    log_data = log.dict()
+    log_data = log.model_dump()
     timestamp = datetime.now()
     
     # Convert string IDs to ObjectIds if provided
@@ -372,6 +348,7 @@ async def get_logs_summary_by_level(
         },
         "total_logs": 0,
         "by_level": {},
+        "by_status": {},
         "daily_data": {}
     }
     
@@ -430,6 +407,3 @@ async def get_logs_summary_by_level(
     summary["top_anomalies"] = anomalous_logs
     
     return summary
-
-
-

@@ -1,4 +1,3 @@
-
 """
 User API Routes
 This module contains API endpoints for managing users.
@@ -8,38 +7,13 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Any
 from datetime import datetime
 from bson import ObjectId
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 import bcrypt
-from main import get_current_user, app
+from main import get_current_user, app, PyObjectId
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 # Pydantic models
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, 
-        core_schema: dict, 
-        handler: Any
-    ) -> dict:
-        """
-        Replace __modify_schema__ with __get_pydantic_json_schema__ for Pydantic v2 compatibility.
-        """
-        json_schema = handler(core_schema)
-        json_schema.update(type="string")
-        return json_schema
-
-
 class UserBase(BaseModel):
     firstName: str
     lastName: str
@@ -68,10 +42,11 @@ class UserDB(UserBase):
     createdAt: datetime
     updatedAt: datetime
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str}
+    )
 
 
 class UserChangePassword(BaseModel):
@@ -349,6 +324,3 @@ async def change_password(
     )
     
     return None
-
-
-
