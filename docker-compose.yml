@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: kenya-sme-cybersec-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URI=mongodb+srv://spicelife576:skiPPer8711@cluster0.pmbmm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+      - DB_NAME=KenyaSMECybersec
+      - SECRET_KEY=e9f862c8d7413a4f6bc9f23aa4f6d17d2b1e4d7a63c8952bfa4e791d8a6c42b9
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+
