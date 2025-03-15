@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
+from bson.errors import InvalidId
 from pydantic import BaseModel, Field, ConfigDict
 from main import get_current_user, app, PyObjectId
 
@@ -64,6 +65,23 @@ class ReportDB(ReportBase):
     )
 
 
+# Helper function for ObjectId validation
+def validate_object_id(id_str: str, param_name: str = "ID") -> ObjectId:
+    """Validate and convert string to ObjectId or raise HTTPException."""
+    try:
+        if not ObjectId.is_valid(id_str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+            )
+        return ObjectId(id_str)
+    except InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+        )
+
+
 # Routes
 @router.get("/", response_model=List[Dict[str, Any]])
 async def get_reports(
@@ -85,7 +103,7 @@ async def get_reports(
         org_id = str(current_user["organizationId"])
     
     # Build query
-    query = {"organizationId": ObjectId(org_id)}
+    query = {"organizationId": validate_object_id(org_id, "organization ID")}
     
     if report_type:
         query["reportType"] = report_type
@@ -123,7 +141,12 @@ async def get_report(
     current_user: dict = Depends(get_current_user)
 ):
     """Get a single report by ID."""
-    report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    # Validate the report_id parameter - this will catch the {{report_id}} template issue
+    object_id = validate_object_id(report_id, "report ID")
+    
+    # Now safely use the validated ObjectId
+    report = await app.mongodb.reports.find_one({"_id": object_id})
+    
     if not report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -161,7 +184,7 @@ async def create_report(
         )
     
     # Check if organization exists
-    organization = await app.mongodb.organizations.find_one({"_id": ObjectId(report.organizationId)})
+    organization = await app.mongodb.organizations.find_one({"_id": validate_object_id(report.organizationId, "organization ID")})
     if not organization:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -181,7 +204,7 @@ async def create_report(
     timestamp = datetime.now()
     
     # Convert string IDs to ObjectIds
-    report_data["organizationId"] = ObjectId(report.organizationId)
+    report_data["organizationId"] = validate_object_id(report.organizationId, "organization ID")
     
     # Add additional fields
     report_data.update({
@@ -214,8 +237,11 @@ async def update_report(
     current_user: dict = Depends(get_current_user)
 ):
     """Update a report by ID."""
+    # Validate the report_id parameter
+    object_id = validate_object_id(report_id, "report ID")
+    
     # Check if report exists
-    existing_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    existing_report = await app.mongodb.reports.find_one({"_id": object_id})
     if not existing_report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -252,12 +278,12 @@ async def update_report(
     
     # Update report
     await app.mongodb.reports.update_one(
-        {"_id": ObjectId(report_id)},
+        {"_id": object_id},
         {"$set": update_data}
     )
     
     # Get updated report
-    updated_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    updated_report = await app.mongodb.reports.find_one({"_id": object_id})
     
     # Convert ObjectId to string for JSON serialization
     updated_report["_id"] = str(updated_report["_id"])
@@ -274,8 +300,11 @@ async def delete_report(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete a report by ID."""
+    # Validate the report_id parameter
+    object_id = validate_object_id(report_id, "report ID")
+    
     # Check if report exists
-    existing_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    existing_report = await app.mongodb.reports.find_one({"_id": object_id})
     if not existing_report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -291,7 +320,7 @@ async def delete_report(
         )
     
     # Delete report
-    await app.mongodb.reports.delete_one({"_id": ObjectId(report_id)})
+    await app.mongodb.reports.delete_one({"_id": object_id})
     
     return None
 
@@ -302,8 +331,11 @@ async def generate_report(
     current_user: dict = Depends(get_current_user)
 ):
     """Generate a report by ID (calculate statistics and create report document)."""
+    # Validate the report_id parameter
+    object_id = validate_object_id(report_id, "report ID")
+    
     # Check if report exists
-    existing_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    existing_report = await app.mongodb.reports.find_one({"_id": object_id})
     if not existing_report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -367,12 +399,12 @@ async def generate_report(
     
     # Update report
     await app.mongodb.reports.update_one(
-        {"_id": ObjectId(report_id)},
+        {"_id": object_id},
         {"$set": update_data}
     )
     
     # Get updated report
-    updated_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    updated_report = await app.mongodb.reports.find_one({"_id": object_id})
     
     # Convert ObjectId to string for JSON serialization
     updated_report["_id"] = str(updated_report["_id"])
@@ -390,8 +422,11 @@ async def send_report(
     current_user: dict = Depends(get_current_user)
 ):
     """Mark a report as sent and record the recipients."""
+    # Validate the report_id parameter
+    object_id = validate_object_id(report_id, "report ID")
+    
     # Check if report exists
-    existing_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    existing_report = await app.mongodb.reports.find_one({"_id": object_id})
     if not existing_report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -430,12 +465,12 @@ async def send_report(
     
     # Update report
     await app.mongodb.reports.update_one(
-        {"_id": ObjectId(report_id)},
+        {"_id": object_id},
         {"$set": update_data}
     )
     
     # Get updated report
-    updated_report = await app.mongodb.reports.find_one({"_id": ObjectId(report_id)})
+    updated_report = await app.mongodb.reports.find_one({"_id": object_id})
     
     # Convert ObjectId to string for JSON serialization
     updated_report["_id"] = str(updated_report["_id"])
