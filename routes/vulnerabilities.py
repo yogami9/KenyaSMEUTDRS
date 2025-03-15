@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from bson import ObjectId
+from bson.errors import InvalidId
 from pydantic import BaseModel, Field, ConfigDict
 from main import get_current_user, app, PyObjectId
 
@@ -61,6 +62,22 @@ class VulnerabilityDB(VulnerabilityBase):
         json_encoders={ObjectId: str}
     )
 
+# Helper function for ObjectId validation
+def validate_object_id(id_str: str, param_name: str = "ID") -> ObjectId:
+    """Validate and convert string to ObjectId or raise HTTPException."""
+    try:
+        if not ObjectId.is_valid(id_str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+            )
+        return ObjectId(id_str)
+    except InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+        )
+
 
 # Routes
 @router.get("/", response_model=List[Dict[str, Any]])
@@ -83,10 +100,10 @@ async def get_vulnerabilities(
         org_id = str(current_user["organizationId"])
     
     # Build query
-    query = {"organizationId": ObjectId(org_id)}
+    query = {"organizationId": validate_object_id(org_id, "organization ID")}
     
     if device_id:
-        query["deviceId"] = ObjectId(device_id)
+        query["deviceId"] = validate_object_id(device_id, "device ID")
     
     if severity:
         query["severity"] = severity
@@ -115,7 +132,12 @@ async def get_vulnerability(
     current_user: dict = Depends(get_current_user)
 ):
     """Get a single vulnerability by ID."""
-    vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": ObjectId(vuln_id)})
+    # Validate the vuln_id parameter - this will catch template injection issues
+    object_id = validate_object_id(vuln_id, "vulnerability ID")
+    
+    # Now safely use the validated ObjectId
+    vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": object_id})
+    
     if not vulnerability:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -152,7 +174,8 @@ async def create_vulnerability(
         )
     
     # Check if organization exists
-    organization = await app.mongodb.organizations.find_one({"_id": ObjectId(vulnerability.organizationId)})
+    org_id = validate_object_id(vulnerability.organizationId, "organization ID")
+    organization = await app.mongodb.organizations.find_one({"_id": org_id})
     if not organization:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -160,7 +183,8 @@ async def create_vulnerability(
         )
     
     # Check if device exists
-    device = await app.mongodb.devices.find_one({"_id": ObjectId(vulnerability.deviceId)})
+    device_id = validate_object_id(vulnerability.deviceId, "device ID")
+    device = await app.mongodb.devices.find_one({"_id": device_id})
     if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -195,8 +219,8 @@ async def create_vulnerability(
     timestamp = datetime.now()
     
     # Convert string IDs to ObjectIds
-    vulnerability_data["organizationId"] = ObjectId(vulnerability.organizationId)
-    vulnerability_data["deviceId"] = ObjectId(vulnerability.deviceId)
+    vulnerability_data["organizationId"] = org_id
+    vulnerability_data["deviceId"] = device_id
     
     # Add additional fields
     vulnerability_data.update({
@@ -210,7 +234,7 @@ async def create_vulnerability(
     
     # Update device vulnerability count and security status
     await app.mongodb.devices.update_one(
-        {"_id": ObjectId(vulnerability.deviceId)},
+        {"_id": device_id},
         {
             "$inc": {"vulnerabilityCount": 1},
             "$set": {
@@ -239,8 +263,11 @@ async def update_vulnerability(
     current_user: dict = Depends(get_current_user)
 ):
     """Update a vulnerability by ID."""
+    # Validate the vuln_id parameter
+    object_id = validate_object_id(vuln_id, "vulnerability ID")
+    
     # Check if vulnerability exists
-    existing_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": ObjectId(vuln_id)})
+    existing_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": object_id})
     if not existing_vulnerability:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -286,12 +313,12 @@ async def update_vulnerability(
     
     # Update vulnerability
     await app.mongodb.vulnerabilities.update_one(
-        {"_id": ObjectId(vuln_id)},
+        {"_id": object_id},
         {"$set": update_data}
     )
     
     # Get updated vulnerability
-    updated_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": ObjectId(vuln_id)})
+    updated_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": object_id})
     
     # Convert ObjectId to string for JSON serialization
     updated_vulnerability["_id"] = str(updated_vulnerability["_id"])
@@ -300,24 +327,24 @@ async def update_vulnerability(
     
     # If vulnerability is now fixed, update device security status if no more active vulnerabilities
     if was_open and is_now_fixed:
-        device_id = updated_vulnerability["deviceId"]
+        device_id = ObjectId(updated_vulnerability["deviceId"])
         
         # Count active vulnerabilities for this device
         active_vulnerabilities = await app.mongodb.vulnerabilities.count_documents({
-            "deviceId": ObjectId(device_id),
+            "deviceId": device_id,
             "status": {"$in": ["open", "in_progress"]}
         })
         
         # Count active threats for this device
         active_threats = await app.mongodb.threats.count_documents({
-            "deviceId": ObjectId(device_id),
+            "deviceId": device_id,
             "status": {"$nin": ["resolved", "false_positive"]}
         })
         
         # If no active vulnerabilities or threats, set device to secure
         if active_vulnerabilities == 0 and active_threats == 0:
             await app.mongodb.devices.update_one(
-                {"_id": ObjectId(device_id)},
+                {"_id": device_id},
                 {
                     "$set": {
                         "securityStatus": "secure",
@@ -342,8 +369,11 @@ async def delete_vulnerability(
             detail="Only admin users can delete vulnerabilities"
         )
     
+    # Validate the vuln_id parameter
+    object_id = validate_object_id(vuln_id, "vulnerability ID")
+    
     # Check if vulnerability exists
-    existing_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": ObjectId(vuln_id)})
+    existing_vulnerability = await app.mongodb.vulnerabilities.find_one({"_id": object_id})
     if not existing_vulnerability:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -351,7 +381,7 @@ async def delete_vulnerability(
         )
     
     # Delete vulnerability
-    await app.mongodb.vulnerabilities.delete_one({"_id": ObjectId(vuln_id)})
+    await app.mongodb.vulnerabilities.delete_one({"_id": object_id})
     
     # Update device vulnerability count
     device_id = existing_vulnerability["deviceId"]
@@ -399,9 +429,12 @@ async def get_vulnerability_statistics(
         # Non-admin users can only see vulnerabilities in their organization
         org_id = str(current_user["organizationId"])
     
+    # Validate the org_id parameter
+    org_object_id = validate_object_id(org_id, "organization ID")
+    
     # Build pipeline for aggregation
     pipeline = [
-        {"$match": {"organizationId": ObjectId(org_id)}},
+        {"$match": {"organizationId": org_object_id}},
         {"$group": {
             "_id": {
                 "severity": "$severity",
@@ -462,7 +495,7 @@ async def get_vulnerability_statistics(
     # Calculate average time to fix (only for fixed vulnerabilities)
     pipeline = [
         {"$match": {
-            "organizationId": ObjectId(org_id),
+            "organizationId": org_object_id,
             "status": {"$in": ["patched", "mitigated"]},
             "fixedAt": {"$exists": True},
             "discoveredAt": {"$exists": True}
