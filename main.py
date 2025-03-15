@@ -72,7 +72,7 @@ class PyObjectId(ObjectId):
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, _handler):
         from pydantic_core import core_schema
-        return core_schema.with_info_plain_validator_function(
+        return core_schema.no_info_plain_validator_function(
             cls.validate,
             core_schema.str_schema(),
             serialization=core_schema.to_string_serializer(),
