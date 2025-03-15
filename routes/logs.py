@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
+from bson.errors import InvalidId
 from pydantic import BaseModel, Field, ConfigDict
 from main import get_current_user, app, PyObjectId
 
@@ -47,6 +48,23 @@ class LogDB(LogBase):
     )
 
 
+# Helper function for ObjectId validation
+def validate_object_id(id_str: str, param_name: str = "ID") -> ObjectId:
+    """Validate and convert string to ObjectId or raise HTTPException."""
+    try:
+        if not ObjectId.is_valid(id_str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+            )
+        return ObjectId(id_str)
+    except InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {param_name} format: {id_str}. Must be a valid ObjectId."
+        )
+
+
 # Routes
 @router.get("/", response_model=List[Dict[str, Any]])
 async def get_logs(
@@ -75,13 +93,13 @@ async def get_logs(
     query = {}
     
     if org_id:
-        query["organizationId"] = ObjectId(org_id)
+        query["organizationId"] = validate_object_id(org_id, "organization ID")
     
     if device_id:
-        query["deviceId"] = ObjectId(device_id)
+        query["deviceId"] = validate_object_id(device_id, "device ID")
     
     if user_id:
-        query["userId"] = ObjectId(user_id)
+        query["userId"] = validate_object_id(user_id, "user ID")
     
     if level:
         query["level"] = level
@@ -130,7 +148,12 @@ async def get_log(
     current_user: dict = Depends(get_current_user)
 ):
     """Get a single log by ID."""
-    log = await app.mongodb.logs.find_one({"_id": ObjectId(log_id)})
+    # Validate the log_id parameter - this will catch the {{log_id}} template issue
+    object_id = validate_object_id(log_id, "log ID")
+    
+    # Now safely use the validated ObjectId
+    log = await app.mongodb.logs.find_one({"_id": object_id})
+    
     if not log:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -171,19 +194,19 @@ async def create_log(
     
     # Convert string IDs to ObjectIds if provided
     if log.organizationId:
-        log_data["organizationId"] = ObjectId(log.organizationId)
+        log_data["organizationId"] = validate_object_id(log.organizationId, "organization ID")
     else:
         # Use current user's organization if not specified
         log_data["organizationId"] = current_user["organizationId"]
     
     if log.deviceId:
-        log_data["deviceId"] = ObjectId(log.deviceId)
+        log_data["deviceId"] = validate_object_id(log.deviceId, "device ID")
     
     if log.userId:
-        log_data["userId"] = ObjectId(log.userId)
+        log_data["userId"] = validate_object_id(log.userId, "user ID")
     
     if log.relatedThreatId:
-        log_data["relatedThreatId"] = ObjectId(log.relatedThreatId)
+        log_data["relatedThreatId"] = validate_object_id(log.relatedThreatId, "related threat ID")
     
     # Validate level
     valid_levels = ["info", "warning", "error", "critical"]
@@ -215,52 +238,58 @@ async def create_log(
     
     # If log is anomalous and critical/error, check if a threat should be created
     if log.isAnomalous and log.level in ["critical", "error"] and log.deviceId:
-        # Check if device exists
-        device = await app.mongodb.devices.find_one({"_id": ObjectId(log.deviceId)})
-        if device:
-            # Create a threat based on this anomalous log
-            threat_data = {
-                "organizationId": created_log["organizationId"],
-                "deviceId": ObjectId(log.deviceId),
-                "detectionMethod": "anomaly",
-                "threatType": "anomaly",
-                "severity": "high" if log.level == "critical" else "medium",
-                "confidence": log.anomalyScore or 0.7,
-                "description": f"Anomalous behavior detected: {log.message}",
-                "timestamp": timestamp,
-                "status": "detected",
-                "responseActionIds": [],
-                "createdAt": timestamp,
-                "updatedAt": timestamp
-            }
+        try:
+            # Check if device exists
+            device_id = validate_object_id(log.deviceId, "device ID")
+            device = await app.mongodb.devices.find_one({"_id": device_id})
             
-            if log.ipAddress:
-                threat_data["sourceIp"] = log.ipAddress
-            
-            # Insert threat
-            threat_result = await app.mongodb.threats.insert_one(threat_data)
-            
-            # Update device status
-            await app.mongodb.devices.update_one(
-                {"_id": ObjectId(log.deviceId)},
-                {
-                    "$inc": {"vulnerabilityCount": 1},
-                    "$set": {
-                        "securityStatus": "vulnerable",
-                        "lastSeen": timestamp,
-                        "updatedAt": timestamp
-                    }
+            if device:
+                # Create a threat based on this anomalous log
+                threat_data = {
+                    "organizationId": created_log["organizationId"],
+                    "deviceId": device_id,
+                    "detectionMethod": "anomaly",
+                    "threatType": "anomaly",
+                    "severity": "high" if log.level == "critical" else "medium",
+                    "confidence": log.anomalyScore or 0.7,
+                    "description": f"Anomalous behavior detected: {log.message}",
+                    "timestamp": timestamp,
+                    "status": "detected",
+                    "responseActionIds": [],
+                    "createdAt": timestamp,
+                    "updatedAt": timestamp
                 }
-            )
-            
-            # Update the log with the related threat ID
-            await app.mongodb.logs.update_one(
-                {"_id": result.inserted_id},
-                {"$set": {"relatedThreatId": threat_result.inserted_id}}
-            )
-            
-            # Update the created_log object to include the threat ID
-            created_log["relatedThreatId"] = str(threat_result.inserted_id)
+                
+                if log.ipAddress:
+                    threat_data["sourceIp"] = log.ipAddress
+                
+                # Insert threat
+                threat_result = await app.mongodb.threats.insert_one(threat_data)
+                
+                # Update device status
+                await app.mongodb.devices.update_one(
+                    {"_id": device_id},
+                    {
+                        "$inc": {"vulnerabilityCount": 1},
+                        "$set": {
+                            "securityStatus": "vulnerable",
+                            "lastSeen": timestamp,
+                            "updatedAt": timestamp
+                        }
+                    }
+                )
+                
+                # Update the log with the related threat ID
+                await app.mongodb.logs.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {"relatedThreatId": threat_result.inserted_id}}
+                )
+                
+                # Update the created_log object to include the threat ID
+                created_log["relatedThreatId"] = str(threat_result.inserted_id)
+        except HTTPException:
+            # If device ID validation fails, we'll skip threat creation but still return the log
+            pass
     
     return created_log
 
@@ -278,8 +307,11 @@ async def delete_log(
             detail="Only admin users can delete logs"
         )
     
+    # Validate the log_id parameter
+    object_id = validate_object_id(log_id, "log ID")
+    
     # Check if log exists
-    existing_log = await app.mongodb.logs.find_one({"_id": ObjectId(log_id)})
+    existing_log = await app.mongodb.logs.find_one({"_id": object_id})
     if not existing_log:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -287,7 +319,7 @@ async def delete_log(
         )
     
     # Delete log
-    await app.mongodb.logs.delete_one({"_id": ObjectId(log_id)})
+    await app.mongodb.logs.delete_one({"_id": object_id})
     
     return None
 
@@ -304,6 +336,9 @@ async def get_logs_summary_by_level(
         # Non-admin users can only see logs in their organization
         org_id = str(current_user["organizationId"])
     
+    # Validate organization ID
+    org_object_id = validate_object_id(org_id, "organization ID")
+    
     # Calculate date range
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
@@ -311,7 +346,7 @@ async def get_logs_summary_by_level(
     # Build pipeline for aggregation
     pipeline = [
         {"$match": {
-            "organizationId": ObjectId(org_id),
+            "organizationId": org_object_id,
             "timestamp": {"$gte": start_date, "$lte": end_date}
         }},
         {"$group": {
@@ -387,7 +422,7 @@ async def get_logs_summary_by_level(
     
     # Get top anomalous logs
     anomalous_logs = await app.mongodb.logs.find({
-        "organizationId": ObjectId(org_id),
+        "organizationId": org_object_id,
         "isAnomalous": True,
         "timestamp": {"$gte": start_date, "$lte": end_date}
     }).sort("anomalyScore", -1).limit(5).to_list(5)
