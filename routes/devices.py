@@ -160,6 +160,10 @@ async def create_device(
     device_data = device.model_dump()
     timestamp = datetime.now()
     
+    # Ensure installedSoftware is an array, not None
+    if device_data.get("installedSoftware") is None:
+        device_data["installedSoftware"] = []
+    
     # Add additional fields
     device_data.update({
         "organizationId": ObjectId(device.organizationId),
@@ -251,6 +255,10 @@ async def update_device(
     # Prepare update data
     update_data = {k: v for k, v in device_update.model_dump().items() if v is not None}
     update_data["updatedAt"] = datetime.now()
+    
+    # Ensure installedSoftware is an array, not None
+    if "installedSoftware" in update_data and update_data["installedSoftware"] is None:
+        update_data["installedSoftware"] = []
     
     # Update device
     await app.mongodb.devices.update_one(
