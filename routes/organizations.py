@@ -5,7 +5,7 @@ This module contains API endpoints for managing organizations.
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional, Dict, Any, Annotated
-from datetime import datetime
+from datetime import datetime, timedelta
 from bson import ObjectId
 from pydantic import BaseModel, Field, ConfigDict
 from main import get_current_user, app, PyObjectId
@@ -136,6 +136,20 @@ async def create_organization(
     # Prepare organization data
     org_data = organization.model_dump()
     timestamp = datetime.now()
+    
+    # Handle None values for fields that should be strings in MongoDB
+    org_data["location"] = org_data.get("location") or ""
+    org_data["contactPerson"] = org_data.get("contactPerson") or ""
+    org_data["contactPhone"] = org_data.get("contactPhone") or ""
+    
+    # Handle None value for subscription endDate
+    if "subscription" in org_data and org_data["subscription"] is not None:
+        if org_data["subscription"].get("endDate") is None:
+            # Default to one year from start date if no end date is provided
+            start_date = org_data["subscription"].get("startDate")
+            if start_date:
+                org_data["subscription"]["endDate"] = start_date + timedelta(days=365)
+    
     org_data.update({
         "createdAt": timestamp,
         "updatedAt": timestamp
@@ -187,6 +201,27 @@ async def update_organization(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Organization with name '{update_data['name']}' already exists"
             )
+    
+    # Handle None values for fields that should be strings in MongoDB
+    if "location" in update_data and update_data["location"] is None:
+        update_data["location"] = ""
+    if "contactPerson" in update_data and update_data["contactPerson"] is None:
+        update_data["contactPerson"] = ""
+    if "contactPhone" in update_data and update_data["contactPhone"] is None:
+        update_data["contactPhone"] = ""
+    
+    # Handle None value for subscription endDate
+    if "subscription" in update_data and update_data["subscription"] is not None:
+        if update_data["subscription"].get("endDate") is None:
+            # Default to one year from start date if no end date is provided
+            start_date = update_data["subscription"].get("startDate")
+            if start_date:
+                update_data["subscription"]["endDate"] = start_date + timedelta(days=365)
+            elif "startDate" not in update_data["subscription"] and "subscription" in existing_org:
+                # Use existing start date if available and not being updated
+                start_date = existing_org["subscription"].get("startDate")
+                if start_date:
+                    update_data["subscription"]["endDate"] = start_date + timedelta(days=365)
     
     # Update organization
     await app.mongodb.organizations.update_one(
