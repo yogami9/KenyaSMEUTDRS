@@ -215,6 +215,18 @@ async def create_report(
         "updatedAt": timestamp
     })
     
+    # Initialize fields with empty objects or arrays to satisfy MongoDB schema validation
+    if report_data.get("threatsSummary") is None:
+        report_data["threatsSummary"] = {}
+    if report_data.get("vulnerabilitiesSummary") is None:
+        report_data["vulnerabilitiesSummary"] = {}
+    if report_data.get("complianceStatus") is None:
+        report_data["complianceStatus"] = {}
+    if report_data.get("recommendations") is None:
+        report_data["recommendations"] = []
+    if report_data.get("sentTo") is None:
+        report_data["sentTo"] = []
+    
     # Insert report
     result = await app.mongodb.reports.insert_one(report_data)
     
