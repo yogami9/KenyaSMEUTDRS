@@ -5,11 +5,11 @@ This module contains API endpoints for managing network traffic data.
 
 import logging
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Annotated
 from datetime import datetime, timedelta
 from bson import ObjectId
 from bson.errors import InvalidId
-from pydantic import BaseModel, Field, ConfigDict, validator
+from pydantic import BaseModel, Field, model_validator, field_validator, ConfigDict
 from main import get_current_user, app, PyObjectId
 
 # Configure module logger
@@ -18,12 +18,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/network-traffic", tags=["Network Traffic"])
 
 # Pydantic models
-class DataSplitsModel(BaseModel):
-    training: float
-    validation: float
-    testing: float
-
-
 class NetworkTrafficBase(BaseModel):
     timeWindow: str
     startTime: datetime
@@ -39,7 +33,8 @@ class NetworkTrafficBase(BaseModel):
     anomalyScore: Optional[float] = 0.0
     
     # Validate time window values
-    @validator('timeWindow')
+    @field_validator('timeWindow')
+    @classmethod
     def validate_time_window(cls, v):
         valid_windows = ["5min", "15min", "1hour", "6hour", "24hour"]
         if v not in valid_windows:
@@ -47,11 +42,11 @@ class NetworkTrafficBase(BaseModel):
         return v
     
     # Validate that end time is after start time
-    @validator('endTime')
-    def validate_end_time(cls, v, values):
-        if 'startTime' in values and v <= values['startTime']:
+    @model_validator(mode='after')
+    def validate_times(self):
+        if self.endTime <= self.startTime:
             raise ValueError("End time must be after start time")
-        return v
+        return self
 
 
 class NetworkTrafficCreate(NetworkTrafficBase):
@@ -59,12 +54,13 @@ class NetworkTrafficCreate(NetworkTrafficBase):
     deviceId: Optional[str] = None
     
     # Validate ObjectId format for IDs
-    @validator('organizationId', 'deviceId')
-    def validate_object_id(cls, v, field):
-        if v is None and field.name == 'deviceId':
+    @field_validator('organizationId', 'deviceId')
+    @classmethod
+    def validate_object_id(cls, v, info):
+        if v is None and info.field_name == 'deviceId':
             return None  # deviceId is optional
         if not ObjectId.is_valid(v):
-            raise ValueError(f"Invalid {field.name} format. Must be a valid ObjectId.")
+            raise ValueError(f"Invalid {info.field_name} format. Must be a valid ObjectId.")
         return v
 
 
@@ -261,14 +257,6 @@ async def create_network_traffic(
                 detail=f"Organization with ID {traffic.organizationId} not found"
             )
         
-        # Validate time window
-        valid_time_windows = ["5min", "15min", "1hour", "6hour", "24hour"]
-        if traffic.timeWindow not in valid_time_windows:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid time window. Must be one of: {', '.join(valid_time_windows)}"
-            )
-        
         # Check device if deviceId is provided
         if traffic.deviceId:
             device = await app.mongodb.devices.find_one({"_id": ObjectId(traffic.deviceId)})
@@ -298,13 +286,6 @@ async def create_network_traffic(
         
         # Add creation timestamp
         traffic_data["createdAt"] = timestamp
-        
-        # Validate start and end time
-        if traffic_data["endTime"] <= traffic_data["startTime"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="End time must be after start time"
-            )
         
         # Validate anomaly score
         if "anomalyScore" in traffic_data and (traffic_data["anomalyScore"] < 0 or traffic_data["anomalyScore"] > 1):
