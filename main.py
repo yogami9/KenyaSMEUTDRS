@@ -74,7 +74,6 @@ class PyObjectId(ObjectId):
         from pydantic_core import core_schema
         return core_schema.no_info_plain_validator_function(
             cls.validate,
-            core_schema.str_schema(),
             serialization=core_schema.to_string_ser_schema(),
         )
 
